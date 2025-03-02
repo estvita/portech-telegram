@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import logging
 import os
+import asyncio
 from dotenv import load_dotenv
 import telnetlib
 import time
@@ -17,12 +18,12 @@ PORTS = os.getenv("PORTS")
 USERNAME = os.getenv("USERNAME")
 PASSWORD = os.getenv("PASSWORD")
 TIMEOUT = int(os.getenv("TIMEOUT"))
+INTERVAL=int(os.getenv("INTERVAL"))
 
 ports = [int(port.strip()) for port in PORTS.split(",") if port.strip()]
 modules = [(port, f"module{i}") for port in ports for i in (1, 2)]
 
 def decode_sms_text(text: str) -> str:
-
     if re.fullmatch(r"[0-9A-Fa-f]+", text) and len(text) % 4 == 0:
         try:
             decoded = bytes.fromhex(text).decode("utf-16-be")
@@ -33,6 +34,7 @@ def decode_sms_text(text: str) -> str:
     return text
 
 def get_sms(module_index: int):
+
     if module_index < 1 or module_index > len(modules):
         return None, "Invalid module index"
     
@@ -87,7 +89,7 @@ async def getsms_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     await update.message.reply_text(f"Connecting to module {module_index}...")
-    sms_list, error = get_sms(module_index)
+    sms_list, error = await asyncio.to_thread(get_sms, module_index)
     if error:
         await update.message.reply_text(f"Error: {error}")
         return
@@ -99,12 +101,26 @@ async def getsms_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     else:
         await update.message.reply_text("No SMS messages found.")
 
+
+async def sms_check_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+
+    for module_index in range(1, len(modules) + 1):
+        sms_list, error = await asyncio.to_thread(get_sms, module_index)
+        if error:
+            logging.error("Error on module %s: %s", module_index, error)
+        elif sms_list:
+            for sms_index, phone, text in sms_list:
+                message = f"Module {module_index} SMS from {phone}:\n{text}"
+                await context.bot.send_message(chat_id=ADMIN_ID, text=message)
+
+
 def main() -> None:
     logging.basicConfig(
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.ERROR
     )
     application = Application.builder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("getsms", getsms_command))
+    application.job_queue.run_repeating(sms_check_job, interval=INTERVAL, first=0)
     application.run_polling()
 
 if __name__ == "__main__":
