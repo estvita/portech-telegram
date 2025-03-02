@@ -21,8 +21,18 @@ TIMEOUT = int(os.getenv("TIMEOUT"))
 ports = [int(port.strip()) for port in PORTS.split(",") if port.strip()]
 modules = [(port, f"module{i}") for port in ports for i in (1, 2)]
 
-def get_sms(module_index: int):
+def decode_sms_text(text: str) -> str:
 
+    if re.fullmatch(r"[0-9A-Fa-f]+", text) and len(text) % 4 == 0:
+        try:
+            decoded = bytes.fromhex(text).decode("utf-16-be")
+            return decoded
+        except Exception as e:
+            logging.error("SMS Decode Error: %s", e)
+            return text
+    return text
+
+def get_sms(module_index: int):
     if module_index < 1 or module_index > len(modules):
         return None, "Invalid module index"
     
@@ -40,7 +50,6 @@ def get_sms(module_index: int):
         tn.write(b"at+cmgf=1\r\n")
         time.sleep(1)
 
-
         tn.write(b'at+cmgl="ALL"\r\n')
         response = tn.read_until(b"OK", TIMEOUT)
         resp_str = response.decode("utf-8", errors="ignore")
@@ -49,7 +58,8 @@ def get_sms(module_index: int):
         pattern = r'\+CMGL: (\d+),".*?","(.*?)".*?\n(.*?)\n'
         matches = re.findall(pattern, resp_str)
         for sms_index, phone, text in matches:
-            sms_list.append((sms_index, phone, text))
+            decoded_text = decode_sms_text(text.strip())
+            sms_list.append((sms_index, phone, decoded_text))
         
         for sms_index, phone, text in sms_list:
             tn.write(f'at+cmgd={sms_index}\r\n'.encode())
@@ -91,7 +101,7 @@ async def getsms_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 def main() -> None:
     logging.basicConfig(
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.ERROR
     )
     application = Application.builder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("getsms", getsms_command))
